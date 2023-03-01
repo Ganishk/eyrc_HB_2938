@@ -3,12 +3,15 @@
 import cv2 as cv
 from cv2 import aruco
 import numpy as np
-import sys,math
 
+import sys,math
 import socket
 import signal
 from time import sleep
 
+import rospy
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
 ################################################################################ 
 ################################## VARIABLES ################################### 
 ################################################################################
@@ -26,6 +29,7 @@ msg     = ""
 x_goals = [350,150,150,350]
 y_goals = [300,300,150,150]
 theta_goals = [0.25*PI,0.75*PI,-0.75*PI,-0.25*PI]
+x,y,theta = (0,0,0)
 
 ################################################################################ 
 ################################## FUNCTIONS ################################### 
@@ -38,6 +42,7 @@ def signal_handler(sig, frame):
 
 def cleanup():
     s.close()
+    cv.destroyAllWindows()
     print("cleanup done")
 
 def goals():
@@ -63,9 +68,8 @@ def inverse_kinematics(Vx,Vy,W):
 ################################################################################
 
 def p():
-
+    global theta,x_goal,y_goal,theta_goal,x,y,theta
     while True:
-        getPose()
         e_x = x_goal - x
         e_y = y_goal - y
         e_theta = theta_goal - theta
@@ -113,8 +117,6 @@ def establish():
 
     print(f"Connected by {addr} at {IP}:{PORT}")
 
-establish()
-
 ################################################################################ 
 #################################### IMAGE #####################################
 ################################################################################
@@ -122,10 +124,15 @@ establish()
 arucoDict = aruco.Dictionary_get(aruco.DICT_4X4_250)
 arucoParams = aruco.DetectorParameters_create()
 
-def getPose():
+def getPose(data):
     global x,y,theta
-    frame=cv.imread("pose2.png")
+
+    br = CvBridge()
+    rospy.loginfo("receiving camera frame")
+    frame=br.imgmsg_to_cv2(data,"mono8")
+    #frame = cv.imread("pose2.png")
     frame=cv.cvtColor(frame,cv.COLOR_BGR2GRAY)
+
     (corners,marker_ids,reject) = aruco.detectMarkers(
         frame,arucoDict,parameters=arucoParams)
 
@@ -162,30 +169,30 @@ def getPose():
                     #y = 500 - y #-#
                     print("Found the bot at", x,y,theta)
 
-        cv.imshow('frame',result)
+        cv.imshow('arena',result)
         key=cv.waitKey(1)
-
-x_goal=x_goals[0]
-y_goal=y_goals[0]
-theta_goal=theta_goals[0]
-
-x_goal = 355.5
-y_goal = 198.5
-theta_goal = PI/2
-
-while True:
-    p()
-
-s.close()
-cv.destroyAllWindows()
 
 ################################################################################ 
 ##################################### MAIN #####################################
 ################################################################################
 
 def main():
-    signal.signal(signal.SIGINT, signal_handler)
+    global x_goal,y_goal,theta_goal,x,y,theta
     establish()
     rospy.init_node('aruco_feedback_node')
-    rospy.Subscriber('usb_cam/image_rect',Image,callback)
-    rospy.spin()
+    rospy.Subscriber('usb_cam/image_rect',Image,getPose)
+
+    # wait until the 1st feedback
+    while not x: print(".",end="")
+    else: print("Starting from",x,y,theta)
+
+    while (not rospy.is_shutdown()) and x_goals:
+        x_goal = x_goals.pop(0)
+        y_goal = y_goals.pop(0)
+        theta_goal = theta_goals.pop(0)
+        print(x_goal)
+        p()
+
+if __name__=="__main__":
+    signal.signal(signal.SIGINT, signal_handler)
+    main()
