@@ -25,11 +25,12 @@ dTOL    = 5
 aTOL    = 1
 Kpd     = 20
 msg     = ""
+flag    = True
 
 x_goals = [350,150,150,350]
 y_goals = [300,300,150,150]
 theta_goals = [0.25*PI,0.75*PI,-0.75*PI,-0.25*PI]
-x,y,theta = (0,0,0)
+#x,y,theta = (0,0,0)
 
 ################################################################################ 
 ################################## FUNCTIONS ################################### 
@@ -124,53 +125,68 @@ def establish():
 arucoDict = aruco.Dictionary_get(aruco.DICT_4X4_250)
 arucoParams = aruco.DetectorParameters_create()
 
-def getPose(data):
-    global x,y,theta
+def perspection(frame):
+    global matrix,flag
 
-    br = CvBridge()
-    rospy.loginfo("receiving camera frame")
-    frame=br.imgmsg_to_cv2(data,"mono8")
-    #frame = cv.imread("pose2.png")
-    frame=cv.cvtColor(frame,cv.COLOR_BGR2GRAY)
-
+    rospy.loginfo("First trying to locate the aruco")
     (corners,marker_ids,reject) = aruco.detectMarkers(
         frame,arucoDict,parameters=arucoParams)
 
-    if corners:
-        if len(corners)<4: print("[!] Some Arucos are not in detected")
-        pts = [0,0,0,0]
-        for no,corner in zip(marker_ids,corners):
-            (tL,tR,bR,bL) = corner[0]
-            if no==4:
-                pts[0] = bL
-            elif no==8:
-                pts[1] = tL
-            elif no==10:
-                pts[2] = tR
-            elif no==12:
-                pts[3] = bR
-        pts = np.float32(pts)
-        brds =  np.float32([[0,500],[0,0],[500,0],[500,500]])
-        matrix = cv.getPerspectiveTransform(pts,brds)
-        result = cv.warpPerspective(frame,matrix,(500,500),flags=cv.INTER_LINEAR)
+    while True:
+        if corners:
+            if len(corners)<4:
+                print("[!] Some Arucos are not in detected")
+                break
+            pts = [0,0,0,0]
+            for no,corner in zip(marker_ids,corners):
+                (tL,tR,bR,bL) = corner[0]
+                if no==4:
+                    pts[0] = bL
+                elif no==8:
+                    pts[1] = tL
+                elif no==10:
+                    pts[2] = tR
+                elif no==12:
+                    pts[3] = bR
+            pts = np.float32(pts)
+            brds =  np.float32([[0,500],[0,0],[500,0],[500,500]])
+            matrix = cv.getPerspectiveTransform(pts,brds)
+            flag = False
+            break
 
-        (c,m,r) = aruco.detectMarkers( result, arucoDict,parameters=arucoParams)
-        if c:
-            for no,corner in zip(m,c):
-                if no==15:
-                    (tL,tR,bR,bL) = corner[0]
-                    x = (tL[0] + tR[0] + bR[0] + bL[0])/4 #-#
-                    y = 500 - (tL[1] + tR[1] + bR[1] + bL[1])/4 #-#
-                    #tC =((tL[0]+tR[0])/2, 500 - (tL[1]+tR[1])/2 )
-                    rC =((bR[0]+tR[0])/2, 500 - (bR[1]+tR[1])/2 )
-                    dX = rC[0] - x
-                    dY = rC[1] - y
-                    theta = math.atan2(dY,dX) #-#
-                    #y = 500 - y #-#
-                    print("Found the bot at", x,y,theta)
+def getPose(data):
+    global x,y,theta,matrix
 
-        cv.imshow('arena',result)
-        key=cv.waitKey(1)
+    #rospy.loginfo("Locating bot")
+    br = CvBridge()
+    frame = br.imgmsg_to_cv2(data,"mono8")
+    #frame = cv.imread("pose2.png")
+    #frame=cv.cvtColor(frame,cv.COLOR_BGR2GRAY)
+
+    if flag:
+        perspection(frame)
+        return
+    result = cv.warpPerspective(frame,matrix,(500,500),flags=cv.INTER_LINEAR)
+    (c,m,r) = aruco.detectMarkers(result, arucoDict,parameters=arucoParams)
+    if c:
+        for no,corner in zip(m,c):
+            if no==15:
+                (tL,tR,bR,bL) = corner[0]
+                x = (tL[0] + tR[0] + bR[0] + bL[0])/4 #-#
+                y = 500 - (tL[1] + tR[1] + bR[1] + bL[1])/4 #-#
+                #tC =((tL[0]+tR[0])/2, 500 - (tL[1]+tR[1])/2 )
+                rC =((bR[0]+tR[0])/2, 500 - (bR[1]+tR[1])/2 )
+                dX = rC[0] - x
+                dY = rC[1] - y
+                theta = math.atan2(dY,dX) #-#
+                #y = 500 - y #-#
+                print(f"Found the bot at x={x},y={y},\u03b8={theta}", x,y,theta)
+
+    cv.putText(result,f"x: {x}",(30,40),cv.FONT_HERSHEY_SIMPLEX,0.5,(0,),2)
+    cv.putText(result,f"y: {y}",(30,60),cv.FONT_HERSHEY_SIMPLEX,0.5,0xff,2)
+    cv.putText(result,f"t: {theta:.2f}",(30,80),cv.FONT_HERSHEY_SIMPLEX,0.5,(0xff,),1)
+    cv.imshow('arena',result)
+    key=cv.waitKey(1)
 
 ################################################################################ 
 ##################################### MAIN #####################################
@@ -183,6 +199,7 @@ def main():
     rospy.Subscriber('usb_cam/image_rect',Image,getPose)
 
     # wait until the 1st feedback
+    x = 0
     while not x: print(".",end="")
     else: print("Starting from",x,y,theta)
 
@@ -190,7 +207,6 @@ def main():
         x_goal = x_goals.pop(0)
         y_goal = y_goals.pop(0)
         theta_goal = theta_goals.pop(0)
-        print(x_goal)
         p()
 
 if __name__=="__main__":
